@@ -1,0 +1,27 @@
+version: '3.1'
+
+networks:
+  pikabu-network:
+    external:
+      name: pikabu-network
+
+services:
+  php-api:
+    container_name: "pikabu-php"
+    build: ./docker
+    restart: on-failure
+    volumes:
+      - "./:/var/www/html"
+    networks:
+      - pikabu-network
+    tty: true
+  mysql:
+    container_name: "pikabu-mysql"
+    image: mysql:5.7.26
+    environment:
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+    restart: on-failure
+    ports:
+      - "43306:3306"
+    networks:
+      - pikabu-network
