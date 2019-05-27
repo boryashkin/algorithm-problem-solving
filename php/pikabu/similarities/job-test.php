@@ -2,7 +2,7 @@
 include __DIR__ . '/job-similarities.php';
 
 $ff = new FaceFinder();
-//$ff->flush();
+$ff->flush();
 
 # add and search first face
 $faces = $ff->resolve(new Face(1, 200, 500));

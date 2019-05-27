@@ -37,6 +37,8 @@ interface FaceFinderInterface {
 
 class Face implements FaceInterface
 {
+    public $l;//for debug
+
     private $id;
     private $race;
     private $emotion;
@@ -94,22 +96,37 @@ class FaceFinder implements FaceFinderInterface
         if (!$face->getId()) {
             $this->storeFace($face);
         }
+        /** @var FaceInterface[] $resolvedFaces */
         $resolvedFaces = [];
-        $resolvedLs = new SplMaxHeap();
+        $resolvedLs = new SplMinHeap();
         foreach ($this->getAllFaces() as $face2) {
             $l = \sqrt(
                 ($face->getRace() - $face2->race) ** 2
                 + ($face->getEmotion() - $face2->emotion) ** 2
                 + ($face->getOldness() - $face2->oldness) ** 2
             );
-            if ($resolvedLs->count() === 0) {
-                $resolvedLs->insert([$l, $face2->id]);
-                $resolvedFaces[$face2->id] = new Face($face2->race, $face2->emotion, $face2->oldness, $face2->id);
-            } elseif ($resolvedLs->count() > 5) {
-                $value = $resolvedLs->extract();
-                unset($resolvedFaces[$value[1]]);
-            }
+            $resolvedLs->insert([$l, $face2->id]);
         }
+        $len = $resolvedLs->count();
+        $targetLen = $len - 5 > 0 ? $len - 5 : 0;
+        $ids = [];
+        $values = [];
+        while ($len-- > $targetLen) {
+            $value = $resolvedLs->extract();
+            $ids[] = $value[1];
+            $values[$value[1]] = $value[0];
+        }
+        asort($values);
+        foreach ($this->getFacesById($ids) as $face2) {
+            $resolvedFaces[$face2->id] = new Face((int)$face2->race, (int)$face2->emotion, (int)$face2->oldness, (int)$face2->id);
+            $resolvedFaces[$face2->id]->l = $values[$face2->id];
+        }
+        $tmpRf = $resolvedFaces;
+        $resolvedFaces = [];
+        foreach ($values as $key => $value) {
+            $resolvedFaces[] = $tmpRf[$key];
+        }
+
         unset($resolvedLs);
 
         return \array_values($resolvedFaces);
@@ -150,6 +167,36 @@ SQL;
             'SELECT * FROM ' . self::TABLE_NAME,
             [PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => false]
         );
+        $stmt->setFetchMode(PDO::FETCH_OBJ);
+        $stmt->execute();
+
+        return $stmt;
+    }
+
+    /**
+     * @param array $ids
+     * @return bool|PDOStatement
+     */
+    private function getFacesById(array $ids)
+    {
+        if (!$ids) {
+            return [];
+        }
+        $where = '';
+        $i = 0;
+        foreach ($ids as $id) {
+            $where .= ':n' . $i++ . ', ';
+        }
+        $where = substr($where, 0, -2);
+        $tableName = self::TABLE_NAME;
+        $stmt = $this->getConnection()->prepare(
+            "SELECT * FROM $tableName WHERE id in ($where)",
+            [PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => false]
+        );
+        $i = 0;
+        foreach ($ids as $id) {
+            $stmt->bindValue(':n' . $i++, $id);
+        }
         $stmt->setFetchMode(PDO::FETCH_OBJ);
         $stmt->execute();
 
