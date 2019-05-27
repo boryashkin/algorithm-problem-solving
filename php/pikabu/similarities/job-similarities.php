@@ -44,12 +44,9 @@ class Face implements FaceInterface
     private $emotion;
     private $oldness;
 
-    public function __construct(int $race, int $emotion, int $oldness, $id = 0)
+    public function __construct(int $race, int $emotion, int $oldness, int $id = 0)
     {
-        $this->race = $race;
-        $this->emotion = $emotion;
-        $this->oldness = $oldness;
-        $this->id = $id;
+        $this->resetValues($race, $emotion, $oldness, $id);
     }
 
     public function getId(): int
@@ -57,19 +54,42 @@ class Face implements FaceInterface
         return $this->id;
     }
 
+    /*
+     * 0, 20, 40, 60, 80, 100 = 6
+     */
     public function getRace(): int
     {
         return $this->race;
     }
 
+    /*
+     * 0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000 = 11
+     */
     public function getEmotion(): int
     {
         return $this->emotion;
     }
 
+    /*
+     * 0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000 = 11
+     */
     public function getOldness(): int
     {
         return $this->oldness;
+    }
+
+    /**
+     * @param int $race
+     * @param int $emotion
+     * @param int $oldness
+     * @param int $id
+     */
+    public function resetValues(int $race, int $emotion, int $oldness, int $id = 0): void
+    {
+        $this->race = $race;
+        $this->emotion = $emotion;
+        $this->oldness = $oldness;
+        $this->id = $id;
     }
 }
 
@@ -77,6 +97,10 @@ class FaceFinder implements FaceFinderInterface
 {
     private const DB_NAME = 'face_finder';
     private const TABLE_NAME = 'faces';
+    private const PRECOMPUTED_RACES = [0, 20, 40, 60, 80, 100];
+    private const PRECOMPUTED_EMOTION = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+    private const PRECOMPUTED_OLDNESS = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+
     /** @var PDO */
     private $connection;
 
@@ -93,31 +117,29 @@ class FaceFinder implements FaceFinderInterface
     /** @inheritDoc */
     public function resolve(FaceInterface $face): array
     {
+        $closestState = $this->getClosestPrecomputedState($face);
         if (!$face->getId()) {
-            $this->storeFace($face);
+            $result = $this->storeFace($face, $closestState);
+            if ($result === false) {
+                throw new \Exception('Failed to store a face');
+            }
         }
         /** @var FaceInterface[] $resolvedFaces */
         $resolvedFaces = [];
         $resolvedLs = new SplMinHeap();
-        foreach ($this->getAllFaces() as $face2) {
-            $l = \sqrt(
-                ($face->getRace() - $face2->race) ** 2
-                + ($face->getEmotion() - $face2->emotion) ** 2
-                + ($face->getOldness() - $face2->oldness) ** 2
-            );
+        if (!$closestFaces = $this->getClosestFacesId($closestState)) {
+            throw new \Exception('No results for ' . $closestState);
+        }
+        foreach ($closestFaces as $face2) {
+            $l = $this->getDistance($face, new Face((int)$face2->race, (int)$face2->emotion, (int)$face2->oldness));
             $resolvedLs->insert([$l, $face2->id]);
         }
-        $len = $resolvedLs->count();
-        $targetLen = $len - 5 > 0 ? $len - 5 : 0;
-        $ids = [];
         $values = [];
-        while ($len-- > $targetLen) {
+        while ($resolvedLs->count() > 0) {
             $value = $resolvedLs->extract();
-            $ids[] = $value[1];
             $values[$value[1]] = $value[0];
         }
-        asort($values);
-        foreach ($this->getFacesById($ids) as $face2) {
+        foreach ($closestFaces as $face2) {
             $resolvedFaces[$face2->id] = new Face((int)$face2->race, (int)$face2->emotion, (int)$face2->oldness, (int)$face2->id);
             $resolvedFaces[$face2->id]->l = $values[$face2->id];
         }
@@ -138,71 +160,108 @@ class FaceFinder implements FaceFinderInterface
         $this->getConnection()->exec('TRUNCATE TABLE ' . self::TABLE_NAME);
     }
 
+    /**
+     * @param FaceInterface $face1
+     * @param FaceInterface $face2
+     * @return float
+     */
+    private function getDistance(FaceInterface $face1, FaceInterface $face2)
+    {
+        return \sqrt(
+            ($face1->getRace() - $face2->getRace()) ** 2
+            + ($face1->getEmotion() - $face2->getEmotion()) ** 2
+            + ($face1->getOldness() - $face2->getOldness()) ** 2
+        );
+    }
 
     /**
      * @param FaceInterface $face
+     * @return float|int
+     */
+    private function getClosestPrecomputedState(FaceInterface $face)
+    {
+        //Total number of states ~ 3276
+        $closest = 4000;
+        $minL = 99999;
+        $i = 0;
+        $comparedFace = new Face(0, 0, 0);
+        foreach (self::PRECOMPUTED_RACES as $race) {
+            foreach (self::PRECOMPUTED_EMOTION as $emotion) {
+                foreach (self::PRECOMPUTED_OLDNESS as $oldness) {
+                    $i++;
+                    $comparedFace->resetValues($race, $emotion, $oldness);
+                    $l = $this->getDistance($face, $comparedFace);
+                    if ($l < $minL) {
+                        $minL = $l;
+                        $closest = $i;
+                    }
+                    if ($minL == 0) {
+                        break 3;
+                    }
+                }
+            }
+        }
+
+        return $closest;
+    }
+
+    /**
+     * @param FaceInterface $face
+     * @param int $closestState
      * @return bool
      */
-    private function storeFace(FaceInterface $face)
+    private function storeFace(FaceInterface $face, int $closestState)
     {
         $tableName = self::TABLE_NAME;
 
         $insertSql = <<<SQL
-INSERT INTO $tableName (race, emotion, oldness) VALUES (:race, :emotion, :oldness)
+INSERT INTO $tableName (race, emotion, oldness, closest_state) VALUES (:race, :emotion, :oldness, :closest_state)
 SQL;
         $stmt = $this->getConnection()->prepare($insertSql);
-        $stmt->bindParam(':race', $face->getRace());
-        $stmt->bindParam(':emotion', $face->getEmotion());
-        $stmt->bindParam(':oldness', $face->getOldness());
+        $stmt->bindValue(':race', $face->getRace(), PDO::PARAM_INT);
+        $stmt->bindValue(':emotion', $face->getEmotion(), PDO::PARAM_INT);
+        $stmt->bindValue(':oldness', $face->getOldness(), PDO::PARAM_INT);
+        $stmt->bindValue(':closest_state', $closestState, PDO::PARAM_INT);
 
         return $stmt->execute();
     }
 
     /**
+     * @param $closestState
      * @return bool|PDOStatement
      */
-    private function getAllFaces()
+    private function getClosestFacesId($closestState)
     {
-        $stmt = $this->getConnection()->prepare(
-            'SELECT * FROM ' . self::TABLE_NAME,
-            [PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => false]
-        );
-        $stmt->setFetchMode(PDO::FETCH_OBJ);
+        $tableName = self::TABLE_NAME;
+        $selectSql = <<<SQL
+SELECT n.id, n.race, n.emotion, n.oldness, n.closest_state, ABS( cast(n.closest_state as signed) - :closestTo ) AS distance FROM (
+	(
+		SELECT id, race, emotion, oldness, closest_state
+		FROM $tableName
+		WHERE closest_state >= :closestTo
+		ORDER BY closest_state ASC
+		LIMIT 5
+	) UNION ALL (
+		SELECT id, race, emotion, oldness, closest_state
+		FROM $tableName
+		WHERE closest_state < :closestTo
+		ORDER BY closest_state DESC
+		LIMIT 5
+	)
+) AS n
+ORDER BY distance
+LIMIT 5
+SQL;
+        $stmt = $this->getConnection()->prepare($selectSql);
+        $stmt->bindValue(':closestTo', $closestState, PDO::PARAM_INT);
         $stmt->execute();
 
-        return $stmt;
+        return $stmt->fetchAll(PDO::FETCH_OBJ);
     }
 
     /**
-     * @param array $ids
-     * @return bool|PDOStatement
+     * @return PDO
      */
-    private function getFacesById(array $ids)
-    {
-        if (!$ids) {
-            return [];
-        }
-        $where = '';
-        $i = 0;
-        foreach ($ids as $id) {
-            $where .= ':n' . $i++ . ', ';
-        }
-        $where = substr($where, 0, -2);
-        $tableName = self::TABLE_NAME;
-        $stmt = $this->getConnection()->prepare(
-            "SELECT * FROM $tableName WHERE id in ($where)",
-            [PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => false]
-        );
-        $i = 0;
-        foreach ($ids as $id) {
-            $stmt->bindValue(':n' . $i++, $id);
-        }
-        $stmt->setFetchMode(PDO::FETCH_OBJ);
-        $stmt->execute();
-
-        return $stmt;
-    }
-
     private function getConnection()
     {
         if ($this->connection === null) {
@@ -245,8 +304,11 @@ SQL;
 	race tinyint unsigned not null,
 	emotion smallint unsigned not null,
 	oldness smallint unsigned not null,
+	closest_state smallint unsigned not null,
+	index (closest_state),
 	constraint faces_pk
 		primary key (id)
+		
 );
 SQL;
 
