@@ -180,14 +180,29 @@ class FaceFinder implements FaceFinderInterface
      */
     private function getClosestPrecomputedState(FaceInterface $face)
     {
-        //Total number of states ~ 3276
+        //Total number of states ~ 726
         $closest = 4000;
         $minL = 99999;
         $i = 0;
         $comparedFace = new Face(0, 0, 0);
+        $oneRaceStep = 121;//11 * 11 or \count(self::PRECOMPUTED_EMOTION) * \count(self::PRECOMPUTED_OLDNESS)
+        $oneEmotionStep = 11;//11 * 1
+        $oneOldnessStep = 1;//1 * 1
         foreach (self::PRECOMPUTED_RACES as $race) {
+            if ($race < $face->getRace() - 10) {//вычитаем половину шага precomputed_
+                $i += $oneRaceStep;
+                continue;
+            }
             foreach (self::PRECOMPUTED_EMOTION as $emotion) {
+                if ($emotion < $face->getEmotion() - 50) {
+                    $i += $oneEmotionStep;
+                    continue;
+                }
                 foreach (self::PRECOMPUTED_OLDNESS as $oldness) {
+                    if ($oldness < $face->getOldness() - 50) {
+                        $i += $oneOldnessStep;
+                        continue;
+                    }
                     $i++;
                     $comparedFace->resetValues($race, $emotion, $oldness);
                     $l = $this->getDistance($face, $comparedFace);
