@@ -13,7 +13,7 @@ function binSearch(int $needle, array $haystack)
         }
     }
 
-    return [$i, $j, $haystack[$j]];
+    return $haystack[$j] === $needle ? $j : false;
 }
 
-var_dump(binSearch(9, [0,1,2,3,4,5,6,7,8,9]));
+var_dump(binSearch(0, [0,1,2,3,4,5,6,7,8,9]));
