@@ -1,7 +1,7 @@
 <?php
 
 /**
- * take X and move all the lower values towards its place; Then put X before bigger value;
+ * take X and move all the bigger values towards its place; Then put X before lower value;
  * @param array $a
  * @return array
  */
